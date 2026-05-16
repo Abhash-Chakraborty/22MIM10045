@@ -84,3 +84,77 @@ WHERE student_id = $1
 ```
 
 At large scale, the main risks are unbounded table growth, slow scans without indexes, and write pressure during broadcasts. Partitioning by `created_at`, archiving old records, and buffering large fan-out work through a queue keep the system healthy as volume rises.
+
+## Stage 3 — Query Optimization
+
+Given the slow query:
+
+```sql
+SELECT *
+FROM notifications
+WHERE studentID = 1042
+  AND isRead = FALSE
+ORDER BY createdAt DESC;
+```
+
+The query is inefficient because it reads unnecessary columns, filters using columns that are not indexed together, and must sort a large result set after scanning many rows.
+
+Use normalized column names, fetch only the needed fields, and add a partial composite index for the hot unread path:
+
+```sql
+CREATE INDEX idx_notifications_student_unread
+ON notifications (student_id, created_at DESC)
+WHERE is_read = FALSE;
+```
+
+Then query:
+
+```sql
+SELECT id, notification_type, message, created_at
+FROM notifications
+WHERE student_id = $1
+  AND is_read = FALSE
+ORDER BY created_at DESC;
+```
+
+Indexing every column is not a safe shortcut. Each index consumes space and slows inserts, updates, and deletes because it must be maintained on every write.
+
+For recent placement alerts:
+
+```sql
+SELECT id, message, created_at
+FROM notifications
+WHERE student_id = $1
+  AND notification_type = 'Placement'
+  AND created_at >= NOW() - INTERVAL '7 days'
+ORDER BY created_at DESC;
+```
+
+Supporting index:
+
+```sql
+CREATE INDEX idx_notifications_type_date
+ON notifications (student_id, notification_type, created_at DESC);
+```
+
+## Stage 4 — Caching Strategy
+
+Use Redis as a read cache for per-student notification feeds:
+
+```text
+Request → Redis hit? → return cached response
+                ↓ miss
+          query PostgreSQL
+                ↓
+        cache result for 60s
+                ↓
+          return response
+```
+
+Recommended policy:
+
+- cache key: `notifs:unread:<studentID>`
+- TTL: 60 seconds
+- invalidate immediately when a notification is inserted or read state changes
+
+This balances fast reads with bounded staleness. A plain TTL cache is simple but can briefly serve old data; write-through invalidation keeps user-visible state fresh after interactions. CDN caching is a poor fit for private per-user data, while read replicas reduce DB load without removing the application-level hot path.
