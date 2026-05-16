@@ -158,3 +158,63 @@ Recommended policy:
 - invalidate immediately when a notification is inserted or read state changes
 
 This balances fast reads with bounded staleness. A plain TTL cache is simple but can briefly serve old data; write-through invalidation keeps user-visible state fresh after interactions. CDN caching is a poor fit for private per-user data, while read replicas reduce DB load without removing the application-level hot path.
+
+## Stage 5 — Bulk Notification Reliability
+
+The naive design is fragile:
+
+```python
+function notify_all(student_ids, message):
+  for student_id in student_ids:
+    send_email(student_id, message)
+    save_to_db(student_id, message)
+    push_to_app(student_id, message)
+```
+
+Problems:
+
+- one transient email failure can stop the whole loop,
+- work is serialized for every student,
+- there is no retry policy,
+- persistence and delivery are coupled even though they have different failure modes.
+
+The database write should be the source of truth and should happen before side effects. Persist the notification fan-out in one transaction, enqueue delivery jobs, and let workers process email and push delivery independently with retries.
+
+```text
+Request received
+      ↓
+Bulk insert notifications in one transaction
+      ↓
+Enqueue delivery jobs
+      ↓
+Return 202 Accepted
+      ↓
+Workers send email/push with retry + backoff
+```
+
+Illustrative pseudocode:
+
+```ts
+async function notifyAll(studentIds: string[], message: string) {
+  await db.bulkInsert(
+    studentIds.map((studentId) => ({
+      studentId,
+      message,
+      type: "Placement",
+    }))
+  );
+
+  const jobs = studentIds.map((studentId) => ({ studentId, message }));
+  await queue.addBulk("send-email", jobs, {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 2000 },
+  });
+  await queue.addBulk("push-notification", jobs, { attempts: 2 });
+}
+```
+
+If delivery fails for one student, the durable notification record already exists and the failed job can be retried without blocking everyone else.
+
+## Stage 6 — Priority Inbox
+
+The working implementation lives in `notification_app_be/priorityInbox.ts`. It fetches notifications, combines type priority with a recency score, and keeps only the top `N` items using a min-heap so the selection cost remains `O(n log k)`.
