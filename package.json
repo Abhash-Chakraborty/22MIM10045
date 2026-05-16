@@ -1,0 +1,12 @@
+{
+  "name": "backend-track-submission",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "npm --prefix logging_middleware run typecheck && npm --prefix vehicle_maintence_scheduler run typecheck && npm --prefix notification_app_be run typecheck",
+    "test": "npm --prefix vehicle_maintence_scheduler test && npm --prefix notification_app_be test",
+    "check": "npm run typecheck && npm test",
+    "scheduler": "npm --prefix vehicle_maintence_scheduler start",
+    "inbox": "npm --prefix notification_app_be start --"
+  }
+}

@@ -12,6 +12,16 @@
 | `POST` | `/notifications/broadcast` | Broadcast a notification to all students |
 | `GET` | `/notifications/unread-count` | Fetch the unread count |
 
+Example request for `POST /notifications`:
+
+```json
+{
+  "studentId": "uuid",
+  "type": "Placement",
+  "message": "Company drive opens tomorrow"
+}
+```
+
 Example response for `GET /notifications`:
 
 ```json
@@ -26,6 +36,32 @@ Example response for `GET /notifications`:
     }
   ],
   "total": 42,
+  "unread": 7
+}
+```
+
+Example response for `PATCH /notifications/:id/read`:
+
+```json
+{
+  "id": "uuid",
+  "isRead": true
+}
+```
+
+Example request for `POST /notifications/broadcast`:
+
+```json
+{
+  "type": "Event",
+  "message": "Annual fest registrations are open"
+}
+```
+
+Example response for `GET /notifications/unread-count`:
+
+```json
+{
   "unread": 7
 }
 ```
@@ -119,15 +155,14 @@ ORDER BY created_at DESC;
 
 Indexing every column is not a safe shortcut. Each index consumes space and slows inserts, updates, and deletes because it must be maintained on every write.
 
-For recent placement alerts:
+To find all students who received a placement notification in the last 7 days:
 
 ```sql
-SELECT id, message, created_at
+SELECT DISTINCT student_id
 FROM notifications
-WHERE student_id = $1
-  AND notification_type = 'Placement'
+WHERE notification_type = 'Placement'
   AND created_at >= NOW() - INTERVAL '7 days'
-ORDER BY created_at DESC;
+ORDER BY student_id;
 ```
 
 Supporting index:
@@ -217,4 +252,4 @@ If delivery fails for one student, the durable notification record already exist
 
 ## Stage 6 — Priority Inbox
 
-The working implementation lives in `notification_app_be/priorityInbox.ts`. It fetches notifications, combines type priority with a recency score, and keeps only the top `N` items using a min-heap so the selection cost remains `O(n log k)`.
+The working implementation lives in `notification_app_be/priorityInbox.ts`. It fetches notifications from the provided API, assigns a larger base weight to `Placement` than `Result` and `Event`, adds a recency score so newer notifications rank above older notifications of the same type, and accepts the desired `N` as a runtime argument. It keeps only the top `N` items in a min-heap, so the selection cost remains `O(n log k)` rather than sorting every notification.

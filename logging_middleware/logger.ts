@@ -1,4 +1,6 @@
 import axios from "axios";
+import fs from "node:fs";
+import path from "node:path";
 
 const BASE_URL = "http://4.224.186.213/evaluation-service";
 
@@ -19,6 +21,35 @@ type BackendPackage =
 type SharedPackage = "auth" | "config" | "middleware" | "utils";
 
 export type LogPackage = BackendPackage | SharedPackage;
+
+function loadRootEnv(): void {
+  const envPath = path.resolve(__dirname, "..", ".env");
+  if (!fs.existsSync(envPath)) {
+    return;
+  }
+
+  const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const value = trimmed.slice(separatorIndex + 1).trim().replace(/^["']|["']$/g, "");
+
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+}
+
+loadRootEnv();
 
 function getAuthToken(): string | undefined {
   const token = process.env.AUTH_TOKEN?.trim();
